@@ -4,6 +4,7 @@
 #include <spi_flash.h>
 
 
+ICACHE_FLASH_ATTR
 fs_err_t fs_format() {
     fs_err_t err;
     uint16_t s;
@@ -12,12 +13,103 @@ fs_err_t fs_format() {
         err = spi_flash_erase_sector(s);
         if (err != SPI_FLASH_RESULT_OK) {
         	ERROR("Canot erase sector: %d, err: %d\r\n", s, err);
-        	return FS_ERR_SECTOR_ERASE;
+        	return FS_ERR_FAT_ERASE;
         }
     }
     return FS_OK;
 }
 
+#define NS      64
+#define SS      4096
+
+
+static ICACHE_FLASH_ATTR
+fs_err_t _node_iter(struct file *f, fs_node_cb_t cb) {
+    fs_err_t err;
+    struct fs_node node;
+    uint8_t i;
+    uint16_t s;
+    uint32_t nodeaddr;
+
+    for (s = FS_SECTOR_FAT_START; s <= FS_SECTOR_FAT_END; s++) {
+        for (i = 0; i < FS_FAT_NODES_PER_SECTOR; i++) {
+            system_soft_wdt_feed();
+            nodeaddr = s * SS + i * NS;
+	        if (spi_flash_read(nodeaddr, (uint32_t*)&node, NS)) {
+                return FS_ERR_FAT_READ;
+            }
+            DEBUG("Iter: %s => sector: 0x%04X node: %02d", f->name, s, i);
+            node.addr = nodeaddr;
+            err = cb(f, &node);
+            
+            /* Requested to break */
+            if (err == FS_OK) {
+                os_memcpy(f, &node, NS);
+                return FS_OK;
+            }
+            /* Requested Next node */
+            else if (err == FS_ERR_ITER_NEXT) {
+                continue;
+            }
+            else if (err) {
+                return err;
+            }
+        }
+    }
+    return FS_ERR_ITER_END;
+}
+
+
+static ICACHE_FLASH_ATTR
+fs_err_t _exactmatch_cb(struct file *f, struct fs_node *n) {
+    if (os_strncmp(f->name, n->name, FS_FILENAME_MAX) == 0) {
+        CHK("found");
+        return FS_OK;
+    }
+    return FS_ERR_ITER_NEXT;
+}
+
+
+//ICACHE_FLASH_ATTR
+//fs_err_t fs_get(struct file *f) {
+//    fs_err_t err;
+//    struct fs_node node;
+//    uint8_t i;
+//    uint16_t s;
+//    for (s = FS_SECTOR_FAT_START; s <= FS_SECTOR_FAT_END; s++) {
+//        for (i = 0; i < FS_FAT_NODES_PER_SECTOR; i++) {
+//            system_soft_wdt_feed();
+//	        if (spi_flash_read(s * SS + i * NS, (uint32_t*)&node, NS)) {
+//                return FS_ERR_FAT_READ;
+//            }
+//            DEBUG("Search: %s => sector: 0x%04X node: %02d", f->name, s, i);
+//            if (os_strncmp(f->name, node.name, FS_FILENAME_MAX) == 0) {
+//                CHK("found");
+//                os_memcpy(f, &node, NS);
+//                return FS_OK;
+//            }
+//        }
+//    }
+//    return FS_ERR_FILENOTFOUND;
+//}
+
+
+ICACHE_FLASH_ATTR
+fs_err_t fs_new(struct file *f) {
+    fs_err_t err;
+
+    /* check if file already exists */
+    err = _node_iter(f, _exactmatch_cb);
+    if (err == FS_OK) {
+        return FS_ERR_FILE_EXISTS;
+    }
+    if (err != FS_ERR_ITER_END) {
+        return FS_ERR_FILE_NOTFOUND;
+    }
+    
+    /* TODO: loop over fat nodes to find a free node to store file. */
+    /* TODO: set filesize to zero */
+}
 
 //static 
 //void _write_sector(uint16_t len) {

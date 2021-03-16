@@ -3,19 +3,22 @@
 
 #include <c_types.h>
 
+
+/* Limits */
+#define FS_FILENAME_MAX            56
+#define FS_FAT_NODES_PER_SECTOR    64
+
 #ifndef FS_SECTOR_START
-
-#if SPI_SIZE_MAP == 2
-#define FS_SECTOR_START       0x70   
-#define FS_SECTOR_END         0x79   
-#elif SPI_SIZE_MAP == 4
-#define FS_SECTOR_START       0x100  
-#define FS_SECTOR_END         0x200  
-#elif SPI_SIZE_MAP == 6
-#define FS_SECTOR_START       0x200  
-#define FS_SECTOR_END         0x300  
-#endif
-
+  #if SPI_SIZE_MAP == 2
+  #define FS_SECTOR_START       0x70   
+  #define FS_SECTOR_END         0x79   
+  #elif SPI_SIZE_MAP == 4
+  #define FS_SECTOR_START       0x100  
+  #define FS_SECTOR_END         0x200  
+  #elif SPI_SIZE_MAP == 6
+  #define FS_SECTOR_START       0x200  
+  #define FS_SECTOR_END         0x300  
+  #endif
 #endif
 
 #ifndef FS_FAT_SECTORS
@@ -26,49 +29,61 @@
 #define FS_SECTOR_FAT_START    FS_SECTOR_START
 #endif
 
-#define FS_SECTOR_FAT_END      (FS_SECTOR_START + (FS_FAT_SECTORS * 3 - 1)) 
+#define FS_SECTOR_FAT_END      (FS_SECTOR_START + (FS_FAT_SECTORS - 1)) 
 
-
-#ifndef FS_SECTOR_STORAGE     
-#define FS_SECTOR_STORAGE     (FS_SECTOR_START + FS_FAT_SECTORS)
+#ifndef FS_PART_START_SECTOR     
+#define FS_PART_START_SECTOR     (FS_SECTOR_START + FS_FAT_SECTORS)
 #endif
 
 
-#define FS_SIZE               (FS_SECTOR_END - FS_SECTOR_STORAGE)
+#define FS_SIZE               (FS_SECTOR_END - FS_PART_START_SECTOR)
 #define FS_SECTOR_SIZE        4092 
 
 
 /* Errors */
-#define FS_OK                    0
-#define FS_ERR_SECTOR_ERASE     10
+#define FS_OK                     0
+#define FS_ERR_FAT_ERASE         10
+#define FS_ERR_FAT_READ          11
+#define FS_ERR_FILE_EXISTS       12
+#define FS_ERR_FILE_NOTFOUND     13
+#define FS_ERR_ITER_NEXT         14
+#define FS_ERR_ITER_END          15
 
 
-typedef uint16_t sector_t;
-typedef uint8_t fs_err_t;
-
-
+/* File open statuses */
 #define FS_FILESTATUS_IDLE      0
 #define FS_FILESTATUS_READ      1
 #define FS_FILESTATUS_WRITE     2
 #define FS_FILESTATUS_APPEND    3
 
 
-#define FS_FILENAME_MAX     64
 
-struct file {
-    /* Fat fields */
-    char name[FS_FILENAME_MAX];       // 64
-    sector_t sector;                  //  2
+typedef uint8_t fs_err_t;
+
+
+/* Do not modify the size */
+struct fs_node {
+    char name[FS_FILENAME_MAX];       // 56
+    uint32_t addr;                    //  4
+    uint16_t startsector;             //  2
     uint16_t size;                    //  2
-    
-    /* State fields */
-    uint8_t status;                   //  1
-    uint16_t bufflen;                 //  2
-    char *buff;                       //  4
 };
 
 
-typedef fs_err_t (*fscb_t)(struct file *f);
+struct file {
+    char name[FS_FILENAME_MAX];       // 56
+    uint32_t nodeaddr;                //  4
+    uint16_t startsector;             //  2
+    uint16_t size;                    //  2
+
+    uint8_t status; 
+    uint16_t bufflen;
+    char *buff;
+};
+
+
+typedef fs_err_t (*fs_cb_t)(struct file *f);
+typedef fs_err_t (*fs_node_cb_t)(struct file *f, struct fs_node *n);
 
 // TODO:
 // format
