@@ -40,6 +40,10 @@
 #define FS_SECTOR_SIZE        4092 
 
 
+/* Node match flags */
+#define FS_NODE_FREE            1
+#define FS_NODE_ALLOCATED       2
+
 /* Errors */
 #define FS_OK                     0
 #define FS_ERR_FAT_ERASE         10
@@ -97,6 +101,7 @@ typedef fs_err_t (*fs_node_cb_t)(struct file *f, struct fs_node *n);
 fs_err_t fs_format();
 fs_err_t fs_new(struct file *f);
 fs_err_t fs_write(struct file *f, char *data, uint16_t len);
+fs_err_t fs_close(struct file *f);
 //fs_err_t fs_get(struct file *f);
 //fs_err_t fs_list(struct file *f, fscb_t cb);
 //fs_err_t fs_search(struct file *f, char *word, uint8_t wlen, fscb_t cb);

@@ -1,6 +1,7 @@
 #include "fs.h"
 #include "debug.h"
 
+#include <mem.h>
 #include <spi_flash.h>
 
 
@@ -19,17 +20,19 @@ fs_err_t fs_format() {
     return FS_OK;
 }
 
+
 #define NS      64
 #define SS      4096
 
 
 static ICACHE_FLASH_ATTR
-fs_err_t _node_iter(struct file *f, fs_node_cb_t cb) {
+fs_err_t _node_iter(struct file *f, fs_node_cb_t cb, uint8_t filter) {
     fs_err_t err;
     struct fs_node node;
     uint8_t i;
     uint16_t s;
     uint32_t nodeaddr;
+    uint8_t status;
 
     for (s = FS_SECTOR_FAT_START; s <= FS_SECTOR_FAT_END; s++) {
         for (i = 0; i < FS_FAT_NODES_PER_SECTOR; i++) {
@@ -38,7 +41,19 @@ fs_err_t _node_iter(struct file *f, fs_node_cb_t cb) {
 	        if (spi_flash_read(nodeaddr, (uint32_t*)&node, NS)) {
                 return FS_ERR_FAT_READ;
             }
-            DEBUG("Iter: %s => sector: 0x%04X node: %02d", f->name, s, i);
+            
+            status = 0;
+            if (node.addr == nodeaddr) {
+                status |= FS_NODE_ALLOCATED;
+            }
+            else {
+                status |= FS_NODE_FREE;
+            }
+            
+            if (!(status & filter)) {
+                continue;
+
+            }
             node.addr = nodeaddr;
             err = cb(f, &node);
             
@@ -62,6 +77,7 @@ fs_err_t _node_iter(struct file *f, fs_node_cb_t cb) {
 
 static ICACHE_FLASH_ATTR
 fs_err_t _exactmatch_cb(struct file *f, struct fs_node *n) {
+    DEBUG("Iter: %s => sector: 0x%04X addr %06d", f->name, n->addr);
     if (os_strncmp(f->name, n->name, FS_FILENAME_MAX) == 0) {
         CHK("found");
         return FS_OK;
@@ -70,42 +86,24 @@ fs_err_t _exactmatch_cb(struct file *f, struct fs_node *n) {
 }
 
 
-//ICACHE_FLASH_ATTR
-//fs_err_t fs_get(struct file *f) {
-//    fs_err_t err;
-//    struct fs_node node;
-//    uint8_t i;
-//    uint16_t s;
-//    for (s = FS_SECTOR_FAT_START; s <= FS_SECTOR_FAT_END; s++) {
-//        for (i = 0; i < FS_FAT_NODES_PER_SECTOR; i++) {
-//            system_soft_wdt_feed();
-//	        if (spi_flash_read(s * SS + i * NS, (uint32_t*)&node, NS)) {
-//                return FS_ERR_FAT_READ;
-//            }
-//            DEBUG("Search: %s => sector: 0x%04X node: %02d", f->name, s, i);
-//            if (os_strncmp(f->name, node.name, FS_FILENAME_MAX) == 0) {
-//                CHK("found");
-//                os_memcpy(f, &node, NS);
-//                return FS_OK;
-//            }
-//        }
-//    }
-//    return FS_ERR_FILENOTFOUND;
-//}
-
-
 ICACHE_FLASH_ATTR
 fs_err_t fs_new(struct file *f) {
     fs_err_t err;
 
     /* check if file already exists */
-    err = _node_iter(f, _exactmatch_cb);
+    err = _node_iter(f, _exactmatch_cb, FS_NODE_ALLOCATED);
     if (err == FS_OK) {
         return FS_ERR_FILE_EXISTS;
     }
     if (err != FS_ERR_ITER_END) {
-        return FS_ERR_FILE_NOTFOUND;
+        return err;
     }
+    
+    f->buff = os_zalloc(FS_SECTOR_SIZE);
+    f->bufflen = 0;
+    CHK("Free node found");
+    return FS_OK;
+    
     
     /* TODO: loop over fat nodes to find a free node to store file. */
     /* TODO: set filesize to zero */
