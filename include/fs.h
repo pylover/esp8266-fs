@@ -19,16 +19,13 @@
   #endif
 #endif
 
-/**
- * It must be multiple of FS_SECTOR_SIZE
- */
 #ifndef FS_SECTORS
 #define FS_SECTORS                 64
 #endif
 
 #define FS_SECTOR_SIZE             4096 
 #define FS_NODE_SIZE               64
-
+#define FS_NODES_PER_SECTOR        64
 
 #define FS_FAT_SECTORS      (FS_SECTORS * FS_NODE_SIZE / FS_SECTOR_SIZE) 
 #define FS_FAT_SECTOR_LAST  ((FS_FAT_SECTORS - 1) + FS_SECTOR_START)
@@ -49,6 +46,7 @@
 #define FS_ERR_ITER_END          15
 #define FS_ERR_NOSPACE           16
 #define FS_ERR_WRITE_NODE        17
+#define FS_ERR_SECTOR_ERASE      18
 
 
 /* File open statuses */

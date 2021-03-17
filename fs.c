@@ -1,5 +1,6 @@
 #include "fs.h"
 #include "debug.h"
+#include "httpd.h"
 
 #include <mem.h>
 #include <spi_flash.h>
@@ -8,67 +9,99 @@
 #define NODE_ADDR(i) \
     ((FS_SECTOR_START * FS_SECTOR_SIZE) + ((i) * FS_NODE_SIZE))
 
-#define NODE_READ(a, n)  \
-    spi_flash_read(a, (uint32_t*)n, sizeof(struct fs_node))
 
-#define NODE_WRITE(a, n)  \
-    spi_flash_write(a, (uint32_t*)n, sizeof(struct fs_node))
+ICACHE_FLASH_ATTR
+fs_err_t fs_format() {
+    fs_err_t err = FS_OK;
+    uint16_t s;
+    uint32_t *tmp = os_zalloc(FS_SECTOR_SIZE);
+
+    /* Erase sectors */
+    for (s = FS_SECTOR_START; s <= FS_FAT_SECTOR_LAST; s++) {
+        INFO("Erasing sector: 0X%03X", s);
+        err = spi_flash_erase_sector(s);
+        if (err != SPI_FLASH_RESULT_OK) {
+        	ERROR("Canot erase sector: %d, err: %d\r\n", s, err);
+        	err = FS_ERR_FAT_ERASE;
+            break;
+        }
+        
+        err = spi_flash_write(s * FS_SECTOR_SIZE, tmp, FS_SECTOR_SIZE);
+        if (err != SPI_FLASH_RESULT_OK) {
+        	ERROR("Canot write sector: %d, err: %d\r\n", s, err);
+        	err = FS_ERR_FAT_ERASE;
+            break;
+        }
+    }
+    os_free(tmp);
+    return err;
+}
 
 
 static ICACHE_FLASH_ATTR
 fs_err_t _node_iter(uint8_t filter, fs_node_cb_t cb, void *arg) {
     fs_err_t err;
-    struct fs_node node;
-    uint16_t id;
-    uint32_t addr;
-        
-    for (id = 0; id < FS_SECTORS; id++) {
-        addr = NODE_ADDR(id);
-        os_memset(&node, 0, FS_NODE_SIZE);
-        //DEBUG("Before read => id: %3u addr: 0X%06X flags: %u s:%u", id, addr, 
-        //        node.flags, node.size);
-	    if (NODE_READ(addr, &node)) {
-            return FS_ERR_FAT_READ;
-        }
-        
-        DEBUG("After read => id: %3u addr: 0X%06X flags: %u s:%u", id, addr, 
-                node.flags, node.size);
+    fs_err_t retval = FS_ERR_ITER_END;
+    uint16_t i;
+    uint32_t s;
+    struct fs_node *t = (struct fs_node *)os_zalloc(FS_SECTOR_SIZE);
+    struct fs_node *n;
 
-        if ( !((node.flags & filter) || (node.flags == filter)) ) {
-            continue;
+    for (s = FS_SECTOR_START; s <= FS_FAT_SECTOR_LAST; s++) {
+        /* Read sector: 0x%03X */
+        err = spi_flash_read(s * FS_SECTOR_SIZE, (uint32_t*)t, FS_SECTOR_SIZE);
+        if (err != SPI_FLASH_RESULT_OK) {
+        	ERROR("Canot read sector: 0x%03X, err: %d", s, err);
+        	retval = FS_ERR_FAT_ERASE;
+            break;
         }
-
-        /* Callback */
-        node.id = id;
-        err = cb(&node, arg);
-
-        /* Requested Next node */
-        if (err == FS_ERR_ITER_NEXT) {
-            continue;
-        }
- 
-        if (err == FS_SAVE) {
-            CHK("Requested to save then break: 0x%06X flags: %d", addr, 
-                    node.flags);
-	        if (NODE_WRITE(addr, &node)) {
-                return FS_ERR_WRITE_NODE;
+        /* Loop over nodes */
+        for (i = 0; i < FS_NODES_PER_SECTOR; i++) {
+            n = t + i;
+            
+            /* Filter: %d %d */
+            if ( !((n->flags & filter) || (n->flags == filter)) ) {
+                continue;
             }
-            return FS_OK;
-        }
+            
+            /* Calculate Id */
+            n->id = (FS_NODES_PER_SECTOR * (s - FS_SECTOR_START)) + i;
+            DEBUG("Sector: 0x%03X id: %3u flags: %u size :%u p: %p", 
+                    s, n->id, n->flags, n->size, n);
 
-        /* Requested to break */
-        if (err == FS_OK) {
-            return FS_OK;
-        }
+            /* Callback: %d */
+            err = cb(n, arg);
 
-       
-        /* Error in user callback */
-        if (err) {
-            return err;
+            /* Requested Next node */
+            if (err == FS_ERR_ITER_NEXT) {
+                continue;
+            }
+ 
+            if (err == FS_SAVE) {
+                CHK("Requested to save then break: id: %d flags: %d", n->id, 
+                        n->flags);
+                
+                err = spi_flash_erase_sector(s);
+                if (err != SPI_FLASH_RESULT_OK) {
+                	ERROR("Canot erase sector: %d, err: %d\r\n", s, err);
+                	retval = FS_ERR_SECTOR_ERASE;
+                    break;
+                }
+	            if (spi_flash_write(s * FS_SECTOR_SIZE, (uint32_t*)t, 
+                            FS_SECTOR_SIZE)) {
+                    retval = FS_ERR_WRITE_NODE;
+                    break;
+                }
+                retval = FS_OK;
+                break;
+            }
+            
+            retval = err;
+            break;
         }
-        
     }
-    return FS_ERR_ITER_END;
+    os_free(t);
+    return retval;
 }
 
 
@@ -76,7 +109,7 @@ static ICACHE_FLASH_ATTR
 fs_err_t _exactmatch_cb( struct fs_node *n, void *arg) {
     struct fs_file *f = (struct fs_file*) arg;
     if (os_strncmp(f->node.name, n->name, FS_FILENAME_MAX) == 0) {
-        CHK("found");
+        /* found */
         return FS_OK;
     }
     return FS_ERR_ITER_NEXT;
@@ -90,43 +123,17 @@ fs_err_t _allocate_cb(struct fs_node *n, void *arg) {
     n->flags = FS_NODE_ALLOCATED;
     n->size = 23000;
     os_memcpy(&f->node, n, FS_NODE_SIZE);
-    CHK("Just return Save on the first occurance");
+    /* Just return Save on the first occurance */
     return FS_SAVE;
 }
-
-
-ICACHE_FLASH_ATTR
-fs_err_t fs_format() {
-    fs_err_t err;
-    uint16_t s;
-    uint32_t tmp = os_zalloc(FS_SECTOR_SIZE);
-
-    /* Erase sectors */
-    for (s = FS_SECTOR_START; s <= FS_FAT_SECTOR_LAST; s++) {
-        INFO("Erasing sector: 0X%03X", s);
-        err = spi_flash_erase_sector(s);
-        if (err != SPI_FLASH_RESULT_OK) {
-        	ERROR("Canot erase sector: %d, err: %d\r\n", s, err);
-        	return FS_ERR_FAT_ERASE;
-        }
-        
-        err = spi_flash_write(s * FS_SECTOR_SIZE, tmp, FS_SECTOR_SIZE);
-        if (err != SPI_FLASH_RESULT_OK) {
-        	ERROR("Canot write sector: %d, err: %d\r\n", s, err);
-        	return FS_ERR_FAT_ERASE;
-        }
-    }
-    return FS_OK;
-}
-
 
 
 ICACHE_FLASH_ATTR
 fs_err_t fs_new(struct fs_file *f) {
     fs_err_t err;
 
-    /* check if file already exists */
     err = _node_iter(FS_NODE_ALLOCATED, _exactmatch_cb, f);
+    CHK("iter err: %d", err);
     if (err == FS_OK) {
         return FS_ERR_FILE_EXISTS;
     }
