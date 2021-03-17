@@ -9,7 +9,7 @@ ICACHE_FLASH_ATTR
 fs_err_t fs_format() {
     fs_err_t err;
     uint16_t s;
-    for (s = FS_SECTOR_FAT_START; s <= FS_SECTOR_FAT_END; s++) {
+    for (s = FS_SECTOR_START; s <= FS_FAT_SECTOR_LAST; s++) {
         INFO("Erasing sector: %04X", s);
         err = spi_flash_erase_sector(s);
         if (err != SPI_FLASH_RESULT_OK) {
@@ -21,64 +21,55 @@ fs_err_t fs_format() {
 }
 
 
-#define NS      64
-#define SS      4096
+#define FS_NODE_ADDR(i)  (FS_SECTOR_START + (i) * FS_NODE_SIZE)
 
 
 static ICACHE_FLASH_ATTR
-fs_err_t _node_iter(struct file *f, fs_node_cb_t cb, uint8_t filter) {
+fs_err_t _node_iter(struct fs_file *f, fs_node_cb_t cb, uint8_t filter) {
     fs_err_t err;
     struct fs_node node;
-    uint8_t i;
-    uint16_t s;
     uint32_t nodeaddr;
-    uint8_t status;
-
-    for (s = FS_SECTOR_FAT_START; s <= FS_SECTOR_FAT_END; s++) {
-        for (i = 0; i < FS_FAT_NODES_PER_SECTOR; i++) {
-            system_soft_wdt_feed();
-            nodeaddr = s * SS + i * NS;
-	        if (spi_flash_read(nodeaddr, (uint32_t*)&node, NS)) {
-                return FS_ERR_FAT_READ;
-            }
-            
-            status = 0;
-            if (node.addr == nodeaddr) {
-                status |= FS_NODE_ALLOCATED;
-            }
-            else {
-                status |= FS_NODE_FREE;
-            }
-            
-            if (!(status & filter)) {
-                continue;
-
-            }
-            node.addr = nodeaddr;
-            err = cb(f, &node);
-            
-            /* Requested to break */
-            if (err == FS_OK) {
-                os_memcpy(f, &node, NS);
-                return FS_OK;
-            }
-            /* Requested Next node */
-            else if (err == FS_ERR_ITER_NEXT) {
-                continue;
-            }
-            else if (err) {
-                return err;
-            }
+    uint16_t id;
+    
+    for (id = 0; id < FS_SECTORS; id++) {
+        nodeaddr = FS_NODE_ADDR(id);
+	    if (spi_flash_read(nodeaddr, (uint32_t*)&node, FS_NODE_SIZE)) {
+            return FS_ERR_FAT_READ;
         }
+        
+        if ( !((node.flags & filter) || (node.flags == filter)) ) {
+            continue;
+        }
+
+        /* Callback */
+        node.id = id;
+        DEBUG("Iter => id: %3d addr 0X%06X", id, nodeaddr);
+        err = cb(f, &node);
+
+        /* Requested to break */
+        if (err == FS_OK) {
+            os_memcpy(f, &node, FS_NODE_SIZE);
+            return FS_OK;
+        }
+
+        /* Requested Next node */
+        else if (err == FS_ERR_ITER_NEXT) {
+            continue;
+        }
+        
+        /* Error in user callback */
+        else if (err) {
+            return err;
+        }
+        
     }
     return FS_ERR_ITER_END;
 }
 
 
 static ICACHE_FLASH_ATTR
-fs_err_t _exactmatch_cb(struct file *f, struct fs_node *n) {
-    DEBUG("Iter: %s => sector: 0x%04X addr %06d", f->name, n->addr);
-    if (os_strncmp(f->name, n->name, FS_FILENAME_MAX) == 0) {
+fs_err_t _exactmatch_cb(struct fs_file *f, struct fs_node *n) {
+    if (os_strncmp(f->node.name, n->name, FS_FILENAME_MAX) == 0) {
         CHK("found");
         return FS_OK;
     }
@@ -87,7 +78,7 @@ fs_err_t _exactmatch_cb(struct file *f, struct fs_node *n) {
 
 
 ICACHE_FLASH_ATTR
-fs_err_t fs_new(struct file *f) {
+fs_err_t fs_new(struct fs_file *f) {
     fs_err_t err;
 
     /* check if file already exists */
@@ -101,7 +92,7 @@ fs_err_t fs_new(struct file *f) {
     
     f->buff = os_zalloc(FS_SECTOR_SIZE);
     f->bufflen = 0;
-    CHK("Free node found");
+    CHK("Free node found: id: %d", f->node.id);
     return FS_OK;
     
     
@@ -109,6 +100,12 @@ fs_err_t fs_new(struct file *f) {
     /* TODO: set filesize to zero */
 }
 
+
+ICACHE_FLASH_ATTR
+fs_err_t fs_close(struct fs_file *f) {
+    os_free(f->buff);
+    return FS_OK;
+}
 //static 
 //void _write_sector(uint16_t len) {
 //	SpiFlashOpResult err;
