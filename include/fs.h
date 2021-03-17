@@ -23,11 +23,10 @@
  * It must be multiple of FS_SECTOR_SIZE
  */
 #ifndef FS_SECTORS
-#define FS_SECTORS                 128
+#define FS_SECTORS                 64
 #endif
 
 #define FS_SECTOR_SIZE             4096 
-#define FS_FILENAME_MAX            54
 #define FS_NODE_SIZE               64
 
 
@@ -35,13 +34,48 @@
 #define FS_FAT_SECTOR_LAST  ((FS_FAT_SECTORS - 1) + FS_SECTOR_START)
 
 
-/* Do not modify the size, it must be exactly 64 bytes. */
+/* Node match flags */
+#define FS_NODE_FREE            0
+#define FS_NODE_ALLOCATED       1
+
+/* Errors */
+#define FS_OK                     0
+#define FS_SAVE                   1
+#define FS_ERR_FAT_ERASE         10
+#define FS_ERR_FAT_READ          11
+#define FS_ERR_FILE_EXISTS       12
+#define FS_ERR_FILE_NOTFOUND     13
+#define FS_ERR_ITER_NEXT         14
+#define FS_ERR_ITER_END          15
+#define FS_ERR_NOSPACE           16
+#define FS_ERR_WRITE_NODE        17
+
+
+/* File open statuses */
+#define FS_FILESTATUS_IDLE      0
+#define FS_FILESTATUS_READ      1
+#define FS_FILESTATUS_WRITE     2
+#define FS_FILESTATUS_APPEND    3
+
+
+// TODO:
+// new
+// write
+// Append
+// list
+// read
+// flush
+
+
+/* Do not modify the definition order & size, it must be exactly 64 bytes. */
+#define FS_FILENAME_MAX            54
+
 struct fs_node {
     char name[FS_FILENAME_MAX + 1]; // 55
+    uint8_t flags;                  //  1
     uint32_t size;                  //  4
     uint16_t id;                    //  2
     uint16_t nid;                   //  2
-    uint8_t flags;                  //  1
 };
 
 
@@ -56,39 +90,9 @@ struct fs_file {
 
 typedef uint8_t fs_err_t;
 typedef fs_err_t (*fs_cb_t)(struct fs_file *f);
-typedef fs_err_t (*fs_node_cb_t)(struct fs_file *f, struct fs_node *n);
+typedef fs_err_t (*fs_node_cb_t)(struct fs_node *n, void *args);
 
 
-/* Node match flags */
-#define FS_NODE_FREE            0
-#define FS_NODE_ALLOCATED       1
-
-/* Errors */
-#define FS_OK                     0
-#define FS_ERR_FAT_ERASE         10
-#define FS_ERR_FAT_READ          11
-#define FS_ERR_FILE_EXISTS       12
-#define FS_ERR_FILE_NOTFOUND     13
-#define FS_ERR_ITER_NEXT         14
-#define FS_ERR_ITER_END          15
-
-
-/* File open statuses */
-#define FS_FILESTATUS_IDLE      0
-#define FS_FILESTATUS_READ      1
-#define FS_FILESTATUS_WRITE     2
-#define FS_FILESTATUS_APPEND    3
-
-
-
-// TODO:
-// format
-// new
-// write
-// Append
-// list
-// read
-// flush
 
 fs_err_t fs_format();
 fs_err_t fs_new(struct fs_file *f);
