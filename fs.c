@@ -106,7 +106,7 @@ fs_err_t _node_iter(uint8_t filter, fs_node_cb_t cb, void *arg) {
 
 
 static ICACHE_FLASH_ATTR
-fs_err_t _exactmatch_cb( struct fs_node *n, void *arg) {
+fs_err_t _namematch_cb( struct fs_node *n, void *arg) {
     struct fs_file *f = (struct fs_file*) arg;
     if (os_strncmp(f->node.name, n->name, FS_FILENAME_MAX) == 0) {
         /* found */
@@ -121,7 +121,8 @@ fs_err_t _allocate_cb(struct fs_node *n, void *arg) {
     struct fs_file *f = (struct fs_file*) arg;
     os_memcpy(n->name, f->node.name, FS_FILENAME_MAX);
     n->flags = FS_NODE_ALLOCATED;
-    n->size = 23000;
+    n->size = 0;
+    n->nextid = n->id;
     os_memcpy(&f->node, n, FS_NODE_SIZE);
     /* Just return Save on the first occurance */
     return FS_SAVE;
@@ -132,7 +133,7 @@ ICACHE_FLASH_ATTR
 fs_err_t fs_new(struct fs_file *f) {
     fs_err_t err;
 
-    err = _node_iter(FS_NODE_ALLOCATED, _exactmatch_cb, f);
+    err = _node_iter(FS_NODE_ALLOCATED, _namematch_cb, f);
     CHK("iter err: %d", err);
     if (err == FS_OK) {
         return FS_ERR_FILE_EXISTS;
@@ -147,21 +148,120 @@ fs_err_t fs_new(struct fs_file *f) {
         return FS_ERR_NOSPACE;
     }
     
-    /* Allocate buffer for file data */
-    f->buff = os_zalloc(FS_SECTOR_SIZE);
-    f->bufflen = 0;
     CHK("Free node found: id: %d", f->node.id);
     return FS_OK;
-    
-    /* TODO: set filesize to zero */
 }
 
 
 ICACHE_FLASH_ATTR
 fs_err_t fs_close(struct fs_file *f) {
-    os_free(f->buff);
     return FS_OK;
 }
+
+
+static ICACHE_FLASH_ATTR
+fs_err_t _node_replace_with_next(struct fs_node *n) {
+    uint16_t addr = FS_NODE_ADDR(n->nextid);
+    return spi_flash_read(addr, (uint32_t*)n, sizeof(struct fs_node));
+}
+
+
+static ICACHE_FLASH_ATTR
+fs_err_t _node_replace_with_last(struct fs_node *n) {
+    fs_err_t err;
+
+    if (FS_NODE_IS_LAST(n)) {
+        return FS_OK;
+    }
+    
+    err = _node_replace_with_next(n);
+    if (err) {
+        return err;
+    }
+
+    return _node_replace_with_last(n);
+}
+
+static ICACHE_FLASH_ATTR
+fs_err_t _node_save(struct fs_node *n) {
+    fs_err_t err;
+    uint32_t sectaddr;
+    err = spi_flash_read(sectaddr, (uint32_t*)buff, FS_SECTOR_SIZE);
+    if (err) {
+        break;
+    }
+    
+    f->node.size += rb_read(b, buff + (FS_SECTOR_SIZE - sectavail), 
+            MIN(avail, sectavail));
+    
+    err = spi_flash_erase_sector(sectaddr / FS_SECTOR_SIZE);
+    if (err) {
+        break;
+    }
+    err = spi_flash_write(sectaddr, (uint32_t*)buff, FS_SECTOR_SIZE);
+    if (err) {
+        break;
+    }
+}
+ 
+
+ICACHE_FLASH_ATTR
+fs_err_t fs_rbwrite(struct fs_file *f, struct ringbuffer *b) {
+    fs_err_t err = FS_OK;
+    uint16_t avail;
+    uint16_t sectavail;
+    uint32_t sectaddr;
+    char *buff;
+    struct fs_node n;
+
+    buff = os_zalloc(FS_SECTOR_SIZE);
+    while (true) {
+        avail = RB_USED(b);
+        if (!avail) {
+            break;
+        }
+        os_memcpy(&n, &f->node, sizeof(struct fs_node));
+        err = _node_replace_with_last(&n);
+        if (err) {
+            break;
+        }
+
+        sectavail = FS_SECTOR_SIZE - (f->node.size % FS_SECTOR_SIZE);
+        sectaddr = FS_NODE_TARGET_ADDR(n.id);
+        CHK("Writing: %d bytes, lastnode: %d lastsect: 0x%06X "
+                "sectavail: %d filename: %s", 
+                avail, n.id, sectaddr, sectavail, f->node.name);
+        
+        if (sectavail) {
+            err = spi_flash_read(sectaddr, (uint32_t*)buff, FS_SECTOR_SIZE);
+            if (err) {
+                break;
+            }
+            
+            f->node.size += rb_read(b, buff + (FS_SECTOR_SIZE - sectavail), 
+                    MIN(avail, sectavail));
+            
+            err = spi_flash_erase_sector(sectaddr / FS_SECTOR_SIZE);
+            if (err) {
+                break;
+            }
+            err = spi_flash_write(sectaddr, (uint32_t*)buff, FS_SECTOR_SIZE);
+            if (err) {
+                break;
+            }
+            
+            err = _node_save(&f->node);
+            if (err) {
+                break;
+            }
+        }
+        
+    }
+    os_free(buff);
+    return err;
+}
+
+
 //static 
 //void _write_sector(uint16_t len) {
 //	SpiFlashOpResult err;

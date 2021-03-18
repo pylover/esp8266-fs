@@ -30,6 +30,13 @@
 #define FS_FAT_SECTORS      (FS_SECTORS * FS_NODE_SIZE / FS_SECTOR_SIZE) 
 #define FS_FAT_SECTOR_LAST  ((FS_FAT_SECTORS - 1) + FS_SECTOR_START)
 
+/* Some utilities */
+#define FS_NODE_ADDR(id)   (((id) * FS_NODE_SIZE) + \
+        (FS_SECTOR_START * FS_SECTOR_SIZE))
+#define FS_NODE_TARGET_SECTOR(id)   ((id) + FS_FAT_SECTOR_LAST + 1)
+#define FS_NODE_TARGET_ADDR(id)   (FS_NODE_TARGET_SECTOR(id) * FS_SECTOR_SIZE)
+#define FS_NODE_IS_LAST(n) ((n)->id == (n)->nextid)
+
 
 /* Node match flags */
 #define FS_NODE_FREE            0
@@ -73,7 +80,7 @@ struct fs_node {
     uint8_t flags;                  //  1
     uint32_t size;                  //  4
     uint16_t id;                    //  2
-    uint16_t nid;                   //  2
+    uint16_t nextid;                //  2
 };
 
 
@@ -81,8 +88,6 @@ struct fs_file {
     struct fs_node node;
 
     uint8_t status; 
-    uint16_t bufflen;
-    char *buff;
 };
 
 
@@ -94,7 +99,7 @@ typedef fs_err_t (*fs_node_cb_t)(struct fs_node *n, void *args);
 
 fs_err_t fs_format();
 fs_err_t fs_new(struct fs_file *f);
-fs_err_t fs_write(struct fs_file *f, char *data, uint16_t len);
+fs_err_t fs_write(struct fs_file *f, const char *tmp, uint16_t len);
 fs_err_t fs_close(struct fs_file *f);
 //fs_err_t fs_get(struct fs_file *f);
 //fs_err_t fs_list(struct fs_file *f, fscb_t cb);
